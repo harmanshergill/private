@@ -1,1 +1,259 @@
-# private
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Transactie toevoegen & beheren</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <script src="https://www.gstatic.com/firebasejs/10.7.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.7.0/firebase-auth-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.7.0/firebase-firestore-compat.js"></script>
+  <style>
+    body { background: #212121; color: #fff; font-family: sans-serif; margin: 0; padding: 20px; }
+    input, select { margin: 5px 0 15px 0; padding: 8px; width: 100%; box-sizing: border-box; }
+    button { background: orange; color: #fff; border: none; padding: 10px 20px; font-weight: bold; cursor: pointer; margin: 3px 0; }
+    form { max-width: 400px; margin: 0 auto; }
+    label { color: #fff; }
+    .center { text-align: center; }
+    .hidden { display: none; }
+    .beheer-knoppen button { padding: 6px 12px; margin-left: 5px; font-size: 0.95em;}
+    .beheer-knoppen .save { background: #2ecc40; }
+    .beheer-knoppen .cancel { background: #666; }
+    .beheer-knoppen .edit { background: orange; }
+    .beheer-knoppen .delete { background: red; }
+    .flex-row { display: flex; align-items: center; gap: 8px; }
+    .uitloggen-btn { background: #fff; color: #212121; border-radius: 4px; float: right; margin-top: -10px;}
+    .switch-btn { background: #ff6200; border-radius: 4px;}
+    .firestore-list { max-width: 700px; margin: 0 auto; padding: 0;}
+    .firestore-list li { border-bottom: 1px solid #333; padding: 6px 0; }
+    .loading { text-align: center; margin: 30px 0; }
+    .beheer-title { display: flex; align-items: center; justify-content: space-between;}
+    @media (max-width: 600px) {
+      .firestore-list { font-size: 0.95em;}
+    }
+  </style>
+</head>
+<body>
+  <!-- Login -->
+  <div id="loginDiv">
+    <input id="email" type="email" placeholder="Email">
+    <input id="password" type="password" placeholder="Wachtwoord">
+    <button onclick="login()">Log in</button>
+  </div>
+  <!-- Pagina 1: Toevoegen -->
+  <div id="pagina1" class="hidden">
+    <div class="center">
+      <button class="uitloggen-btn" onclick="logout()">Uitloggen</button>
+      <h2>Transactie toevoegen</h2>
+      <button class="switch-btn" onclick="naarBeheer()">→ Naar transacties beheren</button>
+    </div>
+    <form id="transactieForm">
+      <label>Naam tegenpartij:</label>
+      <input id="naam" required>
+      <label>Omschrijving:</label>
+      <input id="omschrijving">
+      <label>Bedrag (€):</label>
+      <input id="bedrag" type="number" step="0.01" required>
+      <label>Type:</label>
+      <select id="type">
+        <option value="true">Afschrijving</option>
+        <option value="false">Bijschrijving</option>
+      </select>
+      <label>IBAN tegenpartij:</label>
+      <input id="tegenpartij_iban" placeholder="Bijv. NL00 BANK 0123 4567 89" required>
+      <label>Datum:</label>
+      <input id="datum" type="date" required>
+      <button type="submit">Toevoegen</button>
+    </form>
+  </div>
+  <!-- Pagina 2: Beheren -->
+  <div id="pagina2" class="hidden">
+    <div class="beheer-title">
+      <h2>Transacties beheren</h2>
+      <div>
+        <button class="uitloggen-btn" onclick="logout()">Uitloggen</button>
+        <button class="switch-btn" onclick="naarToevoegen()">↩ Terug</button>
+      </div>
+    </div>
+    <ul id="transactieLijst" class="firestore-list"></ul>
+    <div id="beheerLoading" class="loading hidden">Laden...</div>
+  </div>
+  <script>
+    // --- Firebase setup
+    const firebaseConfig = {
+      apiKey: "AIzaSyBppViDBmKZOOVVSzsYxAPI8CwMut-U81M",
+      authDomain: "transacties-dbdd4.firebaseapp.com",
+      projectId: "transacties-dbdd4",
+      storageBucket: "transacties-dbdd4.appspot.com",
+      messagingSenderId: "872091717873",
+      appId: "1:872091717873:web:6e63bca91465ec38a8d950"
+    };
+    firebase.initializeApp(firebaseConfig);
+    const auth = firebase.auth();
+    const db = firebase.firestore();
+    const MIJN_IBAN = "NL19 INGB 0008 8123 22";
+
+    // --- Auth & Nav
+    function toon(divId) {
+      ['loginDiv', 'pagina1', 'pagina2'].forEach(id => {
+        document.getElementById(id).classList.add('hidden');
+      });
+      document.getElementById(divId).classList.remove('hidden');
+    }
+    function naarBeheer() {
+      toon('pagina2');
+      laadTransacties();
+    }
+    function naarToevoegen() {
+      toon('pagina1');
+    }
+    function login() {
+      const email = document.getElementById('email').value;
+      const pw = document.getElementById('password').value;
+      auth.signInWithEmailAndPassword(email, pw)
+        .then(() => {
+          toon('pagina1');
+        }).catch(e => alert(e.message));
+    }
+    function logout() {
+      auth.signOut().then(() => {
+        toon('loginDiv');
+      });
+    }
+    auth.onAuthStateChanged(user => {
+      if (user) {
+        toon('pagina1');
+      } else {
+        toon('loginDiv');
+      }
+    });
+
+    // --- Toevoegen
+    window.onload = function() {
+      const today = new Date().toISOString().split('T')[0];
+      document.getElementById('datum').value = today;
+    }
+    document.getElementById('transactieForm').onsubmit = async (e) => {
+      e.preventDefault();
+      const naam = document.getElementById('naam').value;
+      const omschrijving = document.getElementById('omschrijving').value;
+      const bedrag = parseFloat(document.getElementById('bedrag').value);
+      const isAfschrijving = document.getElementById('type').value === "true";
+      const tegenpartij_iban = document.getElementById('tegenpartij_iban').value.trim();
+      const datum = document.getElementById('datum').value;
+      await db.collection('rekeningen').doc(MIJN_IBAN)
+        .collection('transacties').add({
+          naam, omschrijving, bedrag, datum, isAfschrijving, tegenpartij_iban
+        });
+      alert('Transactie toegevoegd!');
+      e.target.reset();
+      document.getElementById('datum').value = new Date().toISOString().split('T')[0];
+    };
+
+    // --- Beheren
+    let transactiesCache = [];
+    function laadTransacties() {
+      document.getElementById('transactieLijst').innerHTML = '';
+      document.getElementById('beheerLoading').classList.remove('hidden');
+      db.collection('rekeningen').doc(MIJN_IBAN)
+        .collection('transacties').orderBy('datum', 'desc')
+        .get().then(snapshot => {
+          transactiesCache = [];
+          snapshot.forEach(doc => {
+            transactiesCache.push({ id: doc.id, ...doc.data() });
+          });
+          renderTransactieLijst();
+          document.getElementById('beheerLoading').classList.add('hidden');
+        }).catch(e => {
+          alert("Fout bij laden transacties: " + e.message);
+        });
+    }
+
+    function renderTransactieLijst() {
+      const ul = document.getElementById('transactieLijst');
+      if (transactiesCache.length === 0) {
+        ul.innerHTML = '<li>Geen transacties gevonden.</li>';
+        return;
+      }
+      ul.innerHTML = '';
+      transactiesCache.forEach(tr => {
+        const li = document.createElement('li');
+        li.id = 'tr-' + tr.id;
+        li.innerHTML = `
+          <span class="show">
+            <b>${tr.isAfschrijving ? 'Afschrijving' : 'Bijschrijving'}</b> | 
+            €${tr.bedrag} | 
+            ${tr.naam} | 
+            ${tr.omschrijving || ''} | 
+            ${tr.tegenpartij_iban} | 
+            ${tr.datum}
+          </span>
+          <span class="edit hidden flex-row">
+            <select id="edit-type-${tr.id}">
+              <option value="true"${tr.isAfschrijving ? ' selected' : ''}>Afschrijving</option>
+              <option value="false"${!tr.isAfschrijving ? ' selected' : ''}>Bijschrijving</option>
+            </select>
+            <input id="edit-bedrag-${tr.id}" type="number" value="${tr.bedrag}" step="0.01" style="width:70px;">
+            <input id="edit-naam-${tr.id}" type="text" value="${tr.naam}" style="width:90px;">
+            <input id="edit-omschrijving-${tr.id}" type="text" value="${tr.omschrijving || ''}" style="width:90px;">
+            <input id="edit-iban-${tr.id}" type="text" value="${tr.tegenpartij_iban}" style="width:120px;">
+            <input id="edit-datum-${tr.id}" type="date" value="${tr.datum}" style="width:120px;">
+          </span>
+          <span class="beheer-knoppen show">
+            <button class="edit" onclick="bewerkTransactie('${tr.id}')">Bewerk</button>
+            <button class="delete" onclick="verwijderTransactie('${tr.id}')">Verwijder</button>
+          </span>
+          <span class="beheer-knoppen edit hidden">
+            <button class="save" onclick="opslaanTransactie('${tr.id}')">Opslaan</button>
+            <button class="cancel" onclick="annuleerBewerken('${tr.id}')">Annuleer</button>
+          </span>
+        `;
+        ul.appendChild(li);
+      });
+    }
+
+    // -- Bewerken
+    function bewerkTransactie(trId) {
+      const li = document.getElementById('tr-' + trId);
+      li.querySelectorAll('.show').forEach(el => el.classList.add('hidden'));
+      li.querySelectorAll('.edit').forEach(el => el.classList.remove('hidden'));
+    }
+    function annuleerBewerken(trId) {
+      const li = document.getElementById('tr-' + trId);
+      li.querySelectorAll('.edit').forEach(el => el.classList.add('hidden'));
+      li.querySelectorAll('.show').forEach(el => el.classList.remove('hidden'));
+    }
+    async function opslaanTransactie(trId) {
+      const type = document.getElementById('edit-type-' + trId).value === "true";
+      const bedrag = parseFloat(document.getElementById('edit-bedrag-' + trId).value);
+      const naam = document.getElementById('edit-naam-' + trId).value;
+      const omschrijving = document.getElementById('edit-omschrijving-' + trId).value;
+      const tegenpartij_iban = document.getElementById('edit-iban-' + trId).value;
+      const datum = document.getElementById('edit-datum-' + trId).value;
+      try {
+        await db.collection('rekeningen').doc(MIJN_IBAN)
+          .collection('transacties').doc(trId)
+          .set({
+            naam, omschrijving, bedrag, datum,
+            isAfschrijving: type,
+            tegenpartij_iban
+          });
+        laadTransacties();
+      } catch (e) {
+        alert("Fout bij opslaan: " + e.message);
+      }
+    }
+
+    // -- Verwijderen
+    async function verwijderTransactie(trId) {
+      if (!confirm("Weet je zeker dat je deze transactie wilt verwijderen?")) return;
+      try {
+        await db.collection('rekeningen').doc(MIJN_IBAN)
+          .collection('transacties').doc(trId).delete();
+        laadTransacties();
+      } catch (e) {
+        alert("Fout bij verwijderen: " + e.message);
+      }
+    }
+  </script>
+</body>
+</html>
